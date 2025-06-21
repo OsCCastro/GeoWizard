@@ -1,6 +1,6 @@
 import os
 import csv
-from urllib.request import urlopen
+import json
 
 from PySide6.QtCore import (
     Qt,
@@ -8,6 +8,7 @@ from PySide6.QtCore import (
     QSize,
     QItemSelectionModel,
     QEvent,
+    QUrl,
 )
 from PySide6.QtGui import (
     QAction,
@@ -45,7 +46,9 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QDialog,
     QTextEdit,
+    QStackedLayout,
 )
+from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from config_dialog import ConfigDialog
 from help_dialog import HelpDialog
@@ -258,11 +261,22 @@ class MainWindow(QMainWindow):
         self.canvas.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.canvas.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.canvas.setDragMode(QGraphicsView.ScrollHandDrag)
-        self.osm_item = None
+
+        # Vista web con Leaflet
+        self.web_view = QWebEngineView()
+        html_path = os.path.join(os.path.dirname(__file__), "map_base.html")
+        self.web_view.setUrl(QUrl.fromLocalFile(os.path.abspath(html_path)))
+
+        self.stack = QStackedLayout()
+        self.stack.addWidget(self.canvas)
+        self.stack.addWidget(self.web_view)
+        self.stack.setCurrentWidget(self.canvas)
+        view_container = QWidget()
+        view_container.setLayout(self.stack)
 
         # ensamblar
         main_layout.addLayout(control,1)
-        main_layout.addWidget(self.canvas,2)
+        main_layout.addWidget(view_container,2)
         self.setCentralWidget(central)
 
     def _create_toolbar(self):
@@ -549,36 +563,14 @@ class MainWindow(QMainWindow):
 
     def _toggle_mapbase(self, checked):
         if checked:
+            self.stack.setCurrentWidget(self.web_view)
             try:
                 mgr = self._build_manager_from_table()
-                features = mgr.get_features()
-                if not features:
-                    return
-                all_coords = [pt for feat in features for pt in feat["coords"]]
-                xs = [c[0] for c in all_coords]
-                ys = [c[1] for c in all_coords]
-                cx = sum(xs) / len(xs)
-                cy = sum(ys) / len(ys)
-                zone = int(self.cb_zona.currentText())
-                hemi = self.cb_hemisferio.currentText()
-                epsg = 32600 + zone if hemi.lower().startswith("n") else 32700 + zone
-                tr = Transformer.from_crs(f"epsg:{epsg}", "epsg:4326", always_xy=True)
-                lon, lat = tr.transform(cx, cy)
-                url = f"https://staticmap.openstreetmap.de/staticmap.php?center={lat},{lon}&zoom=16&size=512x512"
-                data = urlopen(url).read()
-                pm = QPixmap()
-                pm.loadFromData(data)
-                if self.osm_item:
-                    self.scene.removeItem(self.osm_item)
-                self.osm_item = self.scene.addPixmap(pm)
-                self.osm_item.setZValue(-1)
-                self.osm_item.setOffset(cx - pm.width()/2, cy - pm.height()/2)
+                self._update_web_features(mgr)
             except Exception as e:
                 QMessageBox.warning(self, "Mapa base", f"No se pudo cargar el mapa: {e}")
         else:
-            if self.osm_item:
-                self.scene.removeItem(self.osm_item)
-                self.osm_item = None
+            self.stack.setCurrentWidget(self.canvas)
 
 
     def _build_manager_from_table(self):
@@ -661,6 +653,31 @@ class MainWindow(QMainWindow):
                     label.setPos(x + size / 2 + 1, y + size / 2 + 1)
                     label.setZValue(1)
                     self.scene.addItem(label)
+
+        if self.chk_mapbase.isChecked():
+            self._update_web_features(mgr)
+
+    def _update_web_features(self, mgr):
+        if not self.chk_mapbase.isChecked() or not mgr:
+            return
+        hemisphere = self.cb_hemisferio.currentText()
+        zone = int(self.cb_zona.currentText())
+        epsg = 32600 + zone if hemisphere.lower().startswith("n") else 32700 + zone
+        transformer = Transformer.from_crs(f"epsg:{epsg}", "epsg:4326", always_xy=True)
+        feats = []
+        for feat in mgr.get_features():
+            latlon = [transformer.transform(x, y) for x, y in feat["coords"]]
+            if feat["type"] == GeometryType.PUNTO:
+                geom = {"type": "Point", "coordinates": latlon[0]}
+            elif feat["type"] == GeometryType.POLILINEA:
+                geom = {"type": "LineString", "coordinates": latlon}
+            else:
+                geom = {"type": "Polygon", "coordinates": [latlon]}
+            feats.append({"type": "Feature", "properties": {"id": feat["id"]}, "geometry": geom})
+
+        geojson = {"type": "FeatureCollection", "features": feats}
+        js = f"window.addFeature({json.dumps(geojson)})"
+        self.web_view.page().runJavaScript(js)
 
     def _on_guardar(self):
         dirp = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta de proyecto")
@@ -1025,6 +1042,8 @@ class MainWindow(QMainWindow):
         try:
             mgr = self._build_manager_from_table()
             self._redraw_scene(mgr)
+            if self.chk_mapbase.isChecked():
+                self._update_web_features(mgr)
             if self.scene.items():
                 self.canvas.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
         except (ValueError, TypeError) as e:
