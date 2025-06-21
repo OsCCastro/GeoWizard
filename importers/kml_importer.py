@@ -280,7 +280,7 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"  Error: {e}")
 
-    print(f"\n--- Probando con zona inválida ---")
+    print("\n--- Probando con zona inválida ---")
     try:
         importer.import_file(test_kml_file, target_hemisphere='Sur', target_zone=99)
     except Exception as e:
