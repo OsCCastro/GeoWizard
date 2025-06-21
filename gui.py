@@ -676,7 +676,10 @@ class MainWindow(QMainWindow):
             feats.append({"type": "Feature", "properties": {"id": feat["id"]}, "geometry": geom})
 
         geojson = {"type": "FeatureCollection", "features": feats}
-        js = f"window.addFeature({json.dumps(geojson)})"
+        js = (
+            "window.clearFeatures && window.clearFeatures();" 
+            f"window.addFeature({json.dumps(geojson)})"
+        )
         self.web_view.page().runJavaScript(js)
 
     def _on_guardar(self):
