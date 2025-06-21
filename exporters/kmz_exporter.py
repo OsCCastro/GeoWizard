@@ -1,5 +1,4 @@
 import zipfile
-import io # io is not strictly needed with the current _generate_kml_string, but good if we change it to use StringIO
 from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
 from pyproj import Transformer

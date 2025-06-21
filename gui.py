@@ -1,21 +1,29 @@
 import os
-from PySide6.QtWidgets import QTextEdit
-from PySide6.QtCore import Qt, QRegularExpression, QPointF, QItemSelectionModel
 import csv
-from PySide6.QtWidgets import QFileDialog
+
+from PySide6.QtCore import (
+    Qt,
+    QRegularExpression,
+    QSize,
+    QItemSelectionModel,
+)
 from PySide6.QtGui import (
     QAction,
     QRegularExpressionValidator,
     QBrush,
-    QPainterPath,
-    QPen
+    QPen,
+    QPixmap,
+    QPainter,
+    QColor,
+    QIcon,
+    QPalette,
 )
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
     QWidget,
     QToolBar,
-    QStyle,
     QMessageBox,
     QVBoxLayout,
     QHBoxLayout,
@@ -32,24 +40,20 @@ from PySide6.QtWidgets import (
     QMenu,
     QStyledItemDelegate,
     QTableWidget,
-    QTableWidgetItem
+    QTableWidgetItem,
+    QDialog,
+    QTextEdit,
 )
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout
 from config_dialog import ConfigDialog
 from help_dialog import HelpDialog
 from core.coordinate_manager import CoordinateManager, GeometryType
 from exporters.kml_exporter import KMLExporter
-from exporters.kmz_exporter import KMZExporter # Asumiendo que existe
-from exporters.shapefile_exporter import ShapefileExporter # Asumiendo que existe
+from exporters.kmz_exporter import KMZExporter  # Asumiendo que existe
+from exporters.shapefile_exporter import ShapefileExporter  # Asumiendo que existe
 from importers.csv_importer import CSVImporter
-from importers.kml_importer import KMLImporter # Importar KMLImporter
+from importers.kml_importer import KMLImporter  # Importar KMLImporter
 from core.geometry import GeometryBuilder
-from PySide6.QtGui import QIcon
-from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtGui import QPixmap, QPainter, QColor, QIcon, QPalette
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QPalette
 
 class UTMDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
@@ -191,6 +195,10 @@ class MainWindow(QMainWindow):
         self.canvas.setScene(self.scene)
         self.canvas.setMinimumSize(400,300)
         self.canvas.setStyleSheet("background-color:white; border:1px solid #ccc; padding:8px;")
+        # Permitir desplazamiento con el cursor en lugar de barras de scroll
+        self.canvas.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.canvas.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.canvas.setDragMode(QGraphicsView.ScrollHandDrag)
 
         # ensamblar
         main_layout.addLayout(control,1)
