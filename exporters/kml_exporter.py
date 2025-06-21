@@ -1,15 +1,6 @@
 # exporters/kml_exporter.py
 from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
-from pyproj import Transformer, ProjError # Import ProjError for specific exception handling
-
-# Si se usaran constantes de GeometryType, se importarían aquí.
-# from core.coordinate_manager import GeometryType
-
-# exporters/kml_exporter.py
-
-from xml.etree.ElementTree import Element, SubElement, tostring
-from xml.dom import minidom
 from pyproj import Transformer
 
 class KMLExporter:
