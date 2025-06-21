@@ -11,23 +11,33 @@
 <body>
 <div id="map"></div>
 <script>
+    // Create the Leaflet map filling the entire window
     var map = L.map('map').setView([0, 0], 2);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
+    L.control.scale().addTo(map);
+
+    // Layer that will hold all features sent from Python
     var geoLayer = L.geoJSON().addTo(map);
+
+    // Add a GeoJSON feature or feature collection to the map
     window.addFeature = function(geojsonStr) {
         try {
             var data = (typeof geojsonStr === 'string') ? JSON.parse(geojsonStr) : geojsonStr;
-            geoLayer.clearLayers();
             geoLayer.addData(data);
-            if (data.features && data.features.length) {
+            if (geoLayer.getLayers().length) {
                 map.fitBounds(geoLayer.getBounds());
             }
         } catch (e) {
             console.error(e);
         }
+    };
+
+    // Remove all currently displayed features
+    window.clearFeatures = function() {
+        geoLayer.clearLayers();
     };
 </script>
 </body>
