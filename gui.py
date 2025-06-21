@@ -1,11 +1,14 @@
 import os
 import csv
+import json
 
 from PySide6.QtCore import (
     Qt,
     QRegularExpression,
     QSize,
     QItemSelectionModel,
+    QEvent,
+    QUrl,
 )
 from PySide6.QtGui import (
     QAction,
@@ -43,7 +46,9 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QDialog,
     QTextEdit,
+    QStackedLayout,
 )
+from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from config_dialog import ConfigDialog
 from help_dialog import HelpDialog
@@ -54,6 +59,7 @@ from exporters.shapefile_exporter import ShapefileExporter  # Asumiendo que exis
 from importers.csv_importer import CSVImporter
 from importers.kml_importer import KMLImporter  # Importar KMLImporter
 from core.geometry import GeometryBuilder
+from pyproj import Transformer
 
 class UTMDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
@@ -61,7 +67,42 @@ class UTMDelegate(QStyledItemDelegate):
         # 6-7 dígitos + decimales opcionales
         rx = QRegularExpression(r'^\d{6,7}(\.\d+)?$')
         editor.setValidator(QRegularExpressionValidator(rx, editor))
+        editor.installEventFilter(self)
+        editor.setProperty("row", index.row())
+        editor.setProperty("column", index.column())
         return editor
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Tab:
+            table = obj.parent()
+            while table and not isinstance(table, QTableWidget):
+                table = table.parent()
+            if not table:
+                return False
+            row = obj.property("row")
+            col = obj.property("column")
+            if col == 1:
+                table.setCurrentCell(row, 2)
+                item = table.item(row, 2)
+                if item is None:
+                    item = QTableWidgetItem("")
+                    table.setItem(row, 2, item)
+                table.editItem(item)
+            elif col == 2:
+                next_row = row + 1
+                if next_row >= table.rowCount():
+                    table.insertRow(next_row)
+                    id_it = QTableWidgetItem(str(next_row + 1))
+                    id_it.setFlags(Qt.ItemIsEnabled)
+                    table.setItem(next_row, 0, id_it)
+                table.setCurrentCell(next_row, 1)
+                item = table.item(next_row, 1)
+                if item is None:
+                    item = QTableWidgetItem("")
+                    table.setItem(next_row, 1, item)
+                table.editItem(item)
+            return True
+        return super().eventFilter(obj, event)
 
     def setModelData(self, editor, model, index):
         text = editor.text()
@@ -75,9 +116,29 @@ class CoordTable(QTableWidget):
     def keyPressEvent(self, event):
         # Tab: al salir de Y, saltar a X de la siguiente fila
         if event.key() == Qt.Key_Tab and self.currentColumn() == 2:
-            self.setCurrentCell(self.currentRow() + 1, 1)
+            next_row = self.currentRow() + 1
+            if next_row < self.rowCount():
+                self.setCurrentCell(next_row, 1)
+                # Comenzar edición inmediatamente
+                item = self.item(next_row, 1)
+                if item is None:
+                    item = QTableWidgetItem("")
+                    self.setItem(next_row, 1, item)
+                self.editItem(item)
             return
         super().keyPressEvent(event)
+
+class CanvasView(QGraphicsView):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._zoom_factor = 1.15
+
+    def wheelEvent(self, event):
+        if event.angleDelta().y() > 0:
+            self.scale(self._zoom_factor, self._zoom_factor)
+        else:
+            self.scale(1 / self._zoom_factor, 1 / self._zoom_factor)
+        event.accept()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -166,6 +227,7 @@ class MainWindow(QMainWindow):
 
         # Mapa base
         self.chk_mapbase = QCheckBox("Usar mapa base (OSM)")
+        self.chk_mapbase.toggled.connect(self._toggle_mapbase)
         control.addWidget(self.chk_mapbase)
 
         # Proyecto / Formato
@@ -190,7 +252,7 @@ class MainWindow(QMainWindow):
         ##################
         # Lienzo (canvas)#
         ##################
-        self.canvas = QGraphicsView()
+        self.canvas = CanvasView()
         self.scene  = QGraphicsScene(self.canvas)
         self.canvas.setScene(self.scene)
         self.canvas.setMinimumSize(400,300)
@@ -200,9 +262,21 @@ class MainWindow(QMainWindow):
         self.canvas.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.canvas.setDragMode(QGraphicsView.ScrollHandDrag)
 
+        # Vista web con Leaflet
+        self.web_view = QWebEngineView()
+        html_path = os.path.join(os.path.dirname(__file__), "map_base.html")
+        self.web_view.setUrl(QUrl.fromLocalFile(os.path.abspath(html_path)))
+
+        self.stack = QStackedLayout()
+        self.stack.addWidget(self.canvas)
+        self.stack.addWidget(self.web_view)
+        self.stack.setCurrentWidget(self.canvas)
+        view_container = QWidget()
+        view_container.setLayout(self.stack)
+
         # ensamblar
         main_layout.addLayout(control,1)
-        main_layout.addWidget(self.canvas,2)
+        main_layout.addWidget(view_container,2)
         self.setCentralWidget(central)
 
     def _create_toolbar(self):
@@ -398,6 +472,7 @@ class MainWindow(QMainWindow):
 
     def _show_table_menu(self, pos):
         menu = QMenu()
+        menu.addAction("Añadir fila", self._add_row)
         menu.addAction("Eliminar fila", self._delete_row)
         menu.addSeparator()
         menu.addAction("Copiar", self._copy_selection)
@@ -417,6 +492,17 @@ class MainWindow(QMainWindow):
                     parts.append(itm.text() if itm else "")
                 text += "\t".join(parts) + "\n"
         QApplication.clipboard().setText(text)
+
+    def _add_row(self):
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        id_it = QTableWidgetItem(str(r + 1))
+        id_it.setFlags(Qt.ItemIsEnabled)
+        self.table.setItem(r, 0, id_it)
+        self.table.setCurrentCell(r, 1)
+        item = QTableWidgetItem("")
+        self.table.setItem(r, 1, item)
+        self.table.editItem(item)
 
     def _delete_row(self):
         r = self.table.currentRow()
@@ -474,6 +560,17 @@ class MainWindow(QMainWindow):
             self._redraw_scene(mgr)
         except (ValueError, TypeError) as e:
              print(f"Error al construir features para preview tras pegar: {e}")
+
+    def _toggle_mapbase(self, checked):
+        if checked:
+            self.stack.setCurrentWidget(self.web_view)
+            try:
+                mgr = self._build_manager_from_table()
+                self._update_web_features(mgr)
+            except Exception as e:
+                QMessageBox.warning(self, "Mapa base", f"No se pudo cargar el mapa: {e}")
+        else:
+            self.stack.setCurrentWidget(self.canvas)
 
 
     def _build_manager_from_table(self):
@@ -556,6 +653,31 @@ class MainWindow(QMainWindow):
                     label.setPos(x + size / 2 + 1, y + size / 2 + 1)
                     label.setZValue(1)
                     self.scene.addItem(label)
+
+        if self.chk_mapbase.isChecked():
+            self._update_web_features(mgr)
+
+    def _update_web_features(self, mgr):
+        if not self.chk_mapbase.isChecked() or not mgr:
+            return
+        hemisphere = self.cb_hemisferio.currentText()
+        zone = int(self.cb_zona.currentText())
+        epsg = 32600 + zone if hemisphere.lower().startswith("n") else 32700 + zone
+        transformer = Transformer.from_crs(f"epsg:{epsg}", "epsg:4326", always_xy=True)
+        feats = []
+        for feat in mgr.get_features():
+            latlon = [transformer.transform(x, y) for x, y in feat["coords"]]
+            if feat["type"] == GeometryType.PUNTO:
+                geom = {"type": "Point", "coordinates": latlon[0]}
+            elif feat["type"] == GeometryType.POLILINEA:
+                geom = {"type": "LineString", "coordinates": latlon}
+            else:
+                geom = {"type": "Polygon", "coordinates": [latlon]}
+            feats.append({"type": "Feature", "properties": {"id": feat["id"]}, "geometry": geom})
+
+        geojson = {"type": "FeatureCollection", "features": feats}
+        js = f"window.addFeature({json.dumps(geojson)})"
+        self.web_view.page().runJavaScript(js)
 
     def _on_guardar(self):
         dirp = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta de proyecto")
@@ -644,8 +766,15 @@ class MainWindow(QMainWindow):
 
         if file_ext in ['.csv', '.txt']:
             try:
-                # 1) Importamos todos los “features” desde el CSV
-                imported_features = CSVImporter.import_file(path)
+                # 1) Importamos todos los “features” desde el CSV.
+                #    Nuestros CSV exportados usan el orden id,x,y con cabecera.
+                imported_features = CSVImporter.import_file(
+                    path,
+                    x_col_idx=1,
+                    y_col_idx=2,
+                    id_col_idx=0,
+                    skip_header=1,
+                )
 
                 # 2) Filtramos solo aquellos que tengan:
                 #    a) Un campo "id" no vacío (feat.get("id") != "").
@@ -913,6 +1042,10 @@ class MainWindow(QMainWindow):
         try:
             mgr = self._build_manager_from_table()
             self._redraw_scene(mgr)
+            if self.chk_mapbase.isChecked():
+                self._update_web_features(mgr)
+            if self.scene.items():
+                self.canvas.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
         except (ValueError, TypeError) as e:
             QMessageBox.warning(self, "Error", f"No se pudo simular: {e}")
 
